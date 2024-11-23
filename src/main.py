@@ -8,14 +8,12 @@ from data.preprocess import preprocess
 from models.xgb import XGBWrapper
 from copy import copy
 from models.pca import PCAWrapper
-import logging 
-import os
 import pickle
+from utils import get_logger, StashableVar, clear_gpu_memory
+from models.vae_train import train_vae as train_vae_
+from models.vae import CVAE
 
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
-logger = logging.getLogger(__name__)
-
+logger = get_logger(__name__) 
 
 class Pipeline:
     def __init__(self, config: Union[Dict, str, Path]):
@@ -25,6 +23,11 @@ class Pipeline:
         
         self.config = conf
         self.dataset_name = self.config["dataset"]["name"]
+        
+        self.output_dir = Path(conf["io"]["data_dir"])
+        if not self.output_dir.exists():
+            logger.warning(f"Output directory {self.output_dir} does not exist. Creating it.")
+            self.output_dir.mkdir(parents=True)
     
     def download(self) -> Path:
         dataset_name = self.config["dataset"]["name"]
@@ -57,9 +60,16 @@ class Pipeline:
         
         categories = data.obs['celltype_annotation'].cat.categories
         
-        return train_X, train_y, val_X, val_y, test_X, test_y, categories
-        
-    
+        self.train_X = StashableVar(train_X)
+        self.train_y = StashableVar(train_y)
+        self.val_X = StashableVar(val_X).stash()
+        self.val_y = StashableVar(val_y)
+        # stash the test data for later
+        self.test_X = StashableVar(test_X).stash()
+        self.test_y = StashableVar(test_y).stash()
+        self.categories = StashableVar(categories)
+
+
     def fit_pca(self, data):
         logger.info("Fitting PCA")
         pca_config = self.config["pca"]
@@ -76,43 +86,97 @@ class Pipeline:
     def train_xgb(self, train_X, train_y, val_X, val_y, model_name):
         logger.info("Training XGB")
         xgb_params = self.config["xgboost"]
-        xgb = XGBWrapper(**xgb_params)
+        xgb = XGBWrapper(xgb_params, name=model_name)
         xgb.fit(train_X, train_y, val_X, val_y)
         
-        out_file = Path(f"/workdir/{self.dataset_name}_{model_name}.xgb")
+        out_file = self.output_dir / f"{self.dataset_name}_{model_name}.xgb"
+        logger.info(f"Saving xgb model to {out_file}")
         xgb.save(out_file)
         return xgb
         
     
-    def eval_xgb(self, model, test_X, test_y):
-        pass
-    
+    def eval_xgb(self, model, test_X, test_y, categories, category_mapping=None):
+        logger.info("Evaluating XGB")
+        if isinstance(test_X, (str, Path)):
+            with open(test_X, "rb") as f:
+                test_X = pickle.load(f)
+        if isinstance(test_y, (str, Path)):
+            with open(test_y, "rb") as f:
+                test_y = pickle.load(f)
+        
+        results = model.evaluate(test_X, test_y, categories, category_mapping)
+        out_file = self.output_dir / f"{self.dataset_name}_{model.name}_xgb_.tsv"
+        logger.info(f"Saving results to {out_file}")
+        results.to_csv(out_file, sep="\t")
+        logger.info(results)
+        
+        
     def shap_explain(self):
         pass
     
     def train_vae(self):
-        pass
+        logger.info("Training VAE")
+        config = self.config["vae"]
+        model_path = self.output_dir / f"{self.dataset_name}_vae.pt"
+        train_vae_(self.X_train.load(), 
+                   self.y_train.load(),
+                   self.X_val.load(),
+                   self.y_val.load(),
+                   config,
+                   model_path)
+        return model_path
+    
+    def train_vxgb(self, vae_path):
+        # train on VAE generated data
+        # generate 2k train samples and 100 eval samples per cell type
+        vae = CVAE.load(vae_path, device="cuda")
+        train_y = [i for i in range(len(self.categories.load())) for _ in range(2000)]
+        train_X = vae.generate(train_y, seed=42).cpu().numpy()
+        
+        val_y = [i for i in range(len(self.categories.load())) for _ in range(100)]
+        val_X = vae.generate(val_y, seed=1337).cpu().numpy()
+        
+        xgb_vae = self.train_xgb(train_X, train_y, val_X, val_y, "synthetic_data")
+        return xgb_vae
+
     
     def run(self):
         data_file = self.download()
         
-        data = self.split_data(self.preprocess_data(data_file))
-        train_X, train_y, val_X, val_y, test_X, test_y, categories = data
+        self.split_data(self.preprocess_data(data_file))
         
-        # stash the test data for later
-        with open("test_X.pkl", "wb") as f:
-            pickle.dump(test_X, f)
-        with open("test_y.pkl", "wb") as f:
-            pickle.dump(test_y, f)
-        del test_X, test_y
-        
-        
-        train_X = self.fit_pca(train_X)
-        val_X = self.apply_pca(val_X)
+        # train_X, etc are initialised in split_data
+        train_X = self.fit_pca(self.train_X.load_once())
+        # original X not needed after pca
+        self.train_X = None
+        val_X = self.apply_pca(self.val_X.load_once())
+        self.val_X = None
+        clear_gpu_memory()
         
         # train XGBoost on the "real" data
-        self.train_xgb(train_X, train_y, val_X, val_y, "real_data")
-
+        train_y = self.train_y.load()
+        val_y = self.val_y.load()
+        xgb_real = self.train_xgb(train_X, train_y, val_X, val_y, "real_data")
+        
+        # eval xgboost
+        categories = self.categories.load()
+        self.eval_xgb(xgb_real, self.test_X.load_once(), self.test_y.load_once(), categories, category_mapping=None)
+        self.shap_explain()
+        clear_gpu_memory()
+        
+        # train VAE
+        vae_path = self.train_vae()
+        
+        # train and val data no longer needed
+        del train_X, val_X, train_y, val_y
+        clear_gpu_memory()
+        
+        # train XGBoost on VAE generated data
+        xgb_vae = self.train_vxgb(vae_path)
+        self.eval_xgb(xgb_vae, self.test_X.load_once(), self.test_y.load_once(), categories, category_mapping=None)
+        self.shap_explain()
+        clear_gpu_memory()
+        
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -120,4 +184,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     pipeline = Pipeline(args.config)
+    
+    logger.info("Starting pipeline")
     pipeline.run()
+    logger.info("Finished pipeline")

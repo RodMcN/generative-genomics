@@ -11,14 +11,13 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 from tqdm.auto import tqdm
 from collections import Counter
-import logging
-import os
 import math
 import joblib
+from utils import get_logger
 
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
 
 
 class PCAWrapper:

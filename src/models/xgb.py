@@ -2,18 +2,19 @@ import pandas as pd
 from xgboost import XGBClassifier
 from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
-import os
 import joblib
-from io import BytesIO
+import tempfile
 from sklearn.metrics import f1_score
 
 
 class XGBWrapper:
-    def __init__(self, params, random_state=42):
+    def __init__(self, params, name, random_state=42):
         self.params = params
+        self.name = name
         self.model = None
         self.random_state = random_state
         self.class_weights = None
+        self.history = None
 
 
     def fit(self, train_x, train_y, val_x, val_y):
@@ -26,12 +27,10 @@ class XGBWrapper:
         
         self.model = XGBClassifier(**self.params,
                           random_state=42,
-                        #   n_jobs=min(os.cpu_count() // 2, 32),
                           objective='multi:softmax',
                           booster="gbtree",
                           eval_metric="mlogloss", 
                           num_class=len(np.unique(train_y)),
-                          # verbosity=0,
                           tree_method="hist", device="cuda"
                           )
 
@@ -45,7 +44,7 @@ class XGBWrapper:
         )
     
     
-    def evaluate(self, test_x, test_y, categories):
+    def evaluate(self, test_x, test_y, categories, category_mapping=None):
         test_y_pred = self.model.predict(test_x)
         
         output_cols = ["cell_type", "f1_score"]
@@ -68,15 +67,18 @@ class XGBWrapper:
         
     
     def save(self, path):
-        
         if self.model is not None:
-            model_buffer = BytesIO()
-            self.model.save_model(model_buffer)
-            model = model_buffer.getvalue()
+            with tempfile.NamedTemporaryFile() as tmp_file:
+                # dump xgboost model to a temp file to save as bytes
+                # janky but keeps everything together without pickling model
+                self.model.save_model(tmp_file.name)
+                tmp_file.seek(0)
+                model = tmp_file.read()
         else:
             model = None
         attributes = {
             'params': self.params,
+            'name': self.name,
             'random_state': self.random_state,
             'class_weights': self.class_weights,
             'model': model
@@ -87,9 +89,19 @@ class XGBWrapper:
     @classmethod
     def load(cls, path):
         attributes = joblib.load(path)
-        instance = cls(params=attributes['params'], random_state=attributes['random_state'])
+        instance = cls(params=attributes['params'], 
+                    name=attributes['name'],
+                    random_state=attributes['random_state'])
         instance.class_weights = attributes['class_weights']
-        model_buffer = BytesIO(attributes['model'])
-        instance.model = XGBClassifier()
-        instance.model.load_model(model_buffer)
+        model_data = attributes['model']
+        if model_data is not None:
+            with tempfile.NamedTemporaryFile() as tmp_file:
+                # load the model from the stored bytes
+                # write to a temp file for load_model
+                tmp_file.write(model_data)
+                tmp_file.flush()
+                instance.model = XGBClassifier()
+                instance.model.load_model(tmp_file.name)
+        else:
+            instance.model = None
         return instance

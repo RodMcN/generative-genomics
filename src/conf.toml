@@ -23,10 +23,10 @@ reg_lambda = 1.0
 early_stopping_rounds = 10
 
 [vae]
-batch_size = 5000
+batch_size = 512
 num_epochs = 100
 train_workers = 16
 val_workers = 8
 
 [io]
-output_dir = "results"
+data_dir = "/out/rna2"
