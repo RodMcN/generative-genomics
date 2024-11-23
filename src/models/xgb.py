@@ -5,6 +5,7 @@ import numpy as np
 import os
 import joblib
 from io import BytesIO
+from sklearn.metrics import f1_score
 
 
 class XGBWrapper:
@@ -30,7 +31,6 @@ class XGBWrapper:
                           booster="gbtree",
                           eval_metric="mlogloss", 
                           num_class=len(np.unique(train_y)),
-                          early_stopping_rounds=10,
                           # verbosity=0,
                           tree_method="hist", device="cuda"
                           )
@@ -41,22 +41,45 @@ class XGBWrapper:
             eval_set=[(val_x, val_y)],
             verbose=True,
             sample_weight=sample_weights,
-            sample_weight_eval_set=sample_weight_eval_set
+            sample_weight_eval_set=sample_weight_eval_set,
         )
     
     
-    def evaluate(self, data):
-        ...
+    def evaluate(self, test_x, test_y, categories):
+        test_y_pred = self.model.predict(test_x)
+        
+        output_cols = ["cell_type", "f1_score"]
+        output_rows = []
+
+        # F1 per class
+        f1_per_class = f1_score(test_y, test_y_pred, average=None)
+        for cat, score in zip(categories, f1_per_class):
+            output_rows.append((cat, score))
+
+        # Macro-Averaged F1
+        macro_f1 = f1_score(test_y, test_y_pred, average='macro')
+        output_rows.append(("macro averaged", macro_f1))
+
+        # Micro-Averaged F1
+        micro_f1 = f1_score(test_y, test_y_pred, average='micro')
+        output_rows.append(("micro averaged", micro_f1))
+
+        return pd.DataFrame(output_rows, columns=output_cols)
         
     
     def save(self, path):
-        model_buffer = BytesIO()
-        self.model.save_model(model_buffer)
+        
+        if self.model is not None:
+            model_buffer = BytesIO()
+            self.model.save_model(model_buffer)
+            model = model_buffer.getvalue()
+        else:
+            model = None
         attributes = {
             'params': self.params,
             'random_state': self.random_state,
             'class_weights': self.class_weights,
-            'model': model_buffer.getvalue()
+            'model': model
         }
         joblib.dump(attributes, path)
 

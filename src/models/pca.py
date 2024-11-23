@@ -34,7 +34,7 @@ class PCAWrapper:
             self.scaler = StandardScaler()
         else:
             self.scaler = None
-        /home/rod/rna2/main.py
+        
         if gpu:
             if not HAS_CUML:
                 logger.warning("cuML is not installed. Falling back to CPU PCA.")
