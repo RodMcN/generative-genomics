@@ -24,6 +24,7 @@ logger = get_logger(__name__)
 class StashableVar:
     """
     Wrapper for a variable that can be saved to disk and loaded later when needed.
+    Provides an easy way to dump large variables to disk when not in use and reload later.
     Can save memory when using large arrays
     """
     def __init__(self, value, name=None, directory="."):
@@ -70,7 +71,8 @@ class StashableVar:
     def load_once(self):
         if not self._stashed:
             return self._value
-        return self.load()
+        with open(self._filename, "rb") as f:
+            return pickle.load(f)
     
     def delete_stash(self):
         if self._filename.exists():
@@ -78,8 +80,8 @@ class StashableVar:
         self._stashed = False
 
 
-    def __del__(self):
-        self.delete_stash()
+    # def __del__(self):
+    #     self.delete_stash()
 
     
     def is_stashed(self):
@@ -96,7 +98,7 @@ class StashableVar:
 
 def clear_gpu_memory():
     cp.get_default_memory_pool().free_all_blocks()
-    cp.get_pinned_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
     torch.cuda.empty_cache()
     torch.cuda.ipc_collect()
     gc.collect()

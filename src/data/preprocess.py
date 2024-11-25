@@ -3,17 +3,14 @@ from pathlib import Path
 import scanpy as sc
 import numpy as np
 from sklearn.model_selection import train_test_split
-import os
-import logging
 from sklearn.feature_selection import VarianceThreshold
+import json
+from utils import get_logger
+
+logger = get_logger(__name__)
 
 
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
-logger = logging.getLogger(__name__)
-
-
-def process(adata_path: Union[Path, str],
+def preprocess(adata_path: Union[Path, str],
                  cell_type_col: str = 'authors_cell_type',
                  doublet_col: str = 'predicted_doublet',
                  mito_col: str = 'pct_counts_mito',
@@ -22,27 +19,67 @@ def process(adata_path: Union[Path, str],
                  test_size: float = 0.2,
                  val_size: float = 0.1,
                  random_state: int = 42,
+                 apply_mapping = False,
+                 subsample=False,
                  ):
-        
     
     logger.info(f"Loading {adata_path}")
     adata = sc.read_h5ad(adata_path)
+    logger.info(f"{adata.shape=}")
     
+    if apply_mapping and "celltype_mapping" in adata.obs.columns:
+        raise ValueError("celltype_mapping is already in adata.obs")
+    
+    if subsample:
+        logger.info("Subsampling")
+        adata = adata[adata.obs.sample(frac=subsample, random_state=random_state).index].copy()
+        logger.info(f"{adata.shape=}")
+
+        
     # remove doublets
     if doublet_col:
         logger.info("Removing doublets")
         # convert to str to accomodate str and bool
         adata = adata[~(adata.obs[doublet_col].astype(str).str.lower() == 'true')]
+        logger.info(f"{adata.shape=}")
     
     # remove nan cell type
     logger.info("Removing cells without cell type")
     adata = adata[~(adata.obs[cell_type_col].isnull())]
+    logger.info(f"{adata.shape=}")
     
+    # remove uninformative cell types
+    logger.info("Removing uninformative cell types")
+    uninformative_types = ["DOUBLET", "LOW_Q", "False", "PLACENTAL_CONTAMINANTS", "UNKNOWN"]
+    high_quality_cell_types = set()
+    uninformative_cell_types = set()
+
+    all_cell_types = adata.obs[cell_type_col].cat.categories.values
+
+    for cell_type in all_cell_types:
+        if not [t for t in uninformative_types if cell_type.startswith(t)]:
+            high_quality_cell_types.add(cell_type)
+        else:
+            uninformative_cell_types.add(cell_type)
+    
+    high_quality_cells = adata.obs['celltype_annotation'].isin(high_quality_cell_types)
+    adata = adata[high_quality_cells]
+    logger.info(f"{adata.shape=}")
+    
+    if apply_mapping:
+        logger.info("Applying cell type mapping")
+        cell_type_mapping = Path(__file__).resolve().parent / "celltype_mapping.json"
+        with open(cell_type_mapping, 'r') as f:
+            cell_type_mapping = json.load(f)
+        adata.obs['celltype_mapping'] = adata.obs['celltype_annotation'].map(cell_type_mapping)
+    
+
+    # split into train and test to calculate statistics
     logger.info("Splitting data")
     adata = split_data(adata, cell_type_col, test_size=test_size, val_size=val_size, random_state=random_state)
     logger.info("Filtering outliers")
     adata = filter_uncommon(adata)
-    adata = iqr_filter_mito_and_genes(adata, cell_type_col=cell_type_col, mito_col=mito_col, gene_count_col=gene_count_col)
+    adata = iqr_filter_mito_and_genes(adata, cell_type_col=cell_type_col if not apply_mapping else "celltype_mapping", mito_col=mito_col, gene_count_col=gene_count_col)
     
     if not is_normalised:
         logger.info("Normalising and transforming data")
@@ -63,7 +100,7 @@ def split_data(adata, cell_type_col, test_size=0.1, val_size=0.1, random_state=4
     indices = np.arange(adata.n_obs)
     
     # stratify by cell type
-    stratify = adata.obs[cell_type_col] if cell_type_col in adata.obs.columns else None
+    stratify = adata.obs[cell_type_col].cat.codes
 
     train_val_indices, test_indices = train_test_split(
         indices,
@@ -73,12 +110,12 @@ def split_data(adata, cell_type_col, test_size=0.1, val_size=0.1, random_state=4
     )
 
     # split train into train and val
-    val_size_adjusted = val_size / (1 - test_size)
+    val_size = val_size / (1 - test_size)
     _, val_indices = train_test_split(
         train_val_indices,
-        test_size=val_size_adjusted,
+        test_size=val_size,
         random_state=random_state,
-        stratify=adata.obs[cell_type_col].iloc[train_val_indices] if stratify is not None else None
+        stratify=stratify[train_val_indices]
     )
 
     adata.obs['split'] = 'train'
@@ -169,7 +206,7 @@ def filter_uncommon(adata, min_cells=100, min_genes=100):
     return adata
 
 
-def filter_low_variance(adata, threshold=0.01):    
+def filter_low_variance(adata, threshold=0.01):
     logger.info(f"Genes before variance filtering: {adata.shape[1]}")
     
     selector = VarianceThreshold(threshold=threshold)

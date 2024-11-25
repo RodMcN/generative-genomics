@@ -5,7 +5,7 @@ doublet_col = "predicted_doublets"
 mito_col = "mito"
 is_normalised= true
 apply_mapping = true
-
+subsample = false
 
 [pca]
 n_components = 2500
@@ -22,7 +22,11 @@ reg_alpha = 1.0
 reg_lambda = 1.0
 early_stopping_rounds = 10
 
+[shap]
+cell_type = "MAST_CELL"
+
 [vae]
+learning_rate = 0.001
 batch_size = 512
 num_epochs = 100
 train_workers = 16
