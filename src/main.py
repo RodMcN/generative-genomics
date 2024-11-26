@@ -131,11 +131,12 @@ class Pipeline:
                 return
             with open(mapping, 'r') as f:
                 mapping = json.load(f)
+            results = model.evaluate(self.test_X.load(), self.test_y.load(), self.categories, category_mapping=mapping)
             out_file = self.output_dir / f"{self.dataset_name}_{model.name}_real_eval_mapped_xgb.tsv"
             logger.info(f"Saving results to {out_file}")
             results.to_csv(out_file, sep="\t")
             logger.info(results)
-            results = model.evaluate(self.test_X.load(), self.test_y.load(), self.categories)
+            
                 
 
     
@@ -151,6 +152,21 @@ class Pipeline:
         out_file = self.output_dir / f"{self.dataset_name}_{model.name}_synth_eval_xgb.tsv"
         logger.info(f"Saving results to {out_file}")
         results.to_csv(out_file, sep="\t")
+        
+        
+        mapping = "data/celltype_mapping.json"
+        if mapping is not None:
+            mapping = Path(mapping)
+            if not mapping.exists():
+                logger.warning(f"Category mapping {mapping} does not exist")
+                return
+            with open(mapping, 'r') as f:
+                mapping = json.load(f)
+            results = model.evaluate(train_X, train_y, self.categories, category_mapping=mapping)
+            out_file = self.output_dir / f"{self.dataset_name}_{model.name}_synth_eval_mapped_xgb.tsv"
+            logger.info(f"Saving results to {out_file}")
+            results.to_csv(out_file, sep="\t")
+            logger.info(results)
         
         
     def shap_explain(self, model, cell_type, filename):

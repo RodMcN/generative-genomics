@@ -35,12 +35,15 @@ def preprocess(adata_path: Union[Path, str],
         adata = adata[adata.obs.sample(frac=subsample, random_state=random_state).index].copy()
         logger.info(f"{adata.shape=}")
 
+    logger.info("Removing cells no expressed genes")
+    adata = adata[adata.obs[gene_count_col] > 0]
+    logger.info(f"{adata.shape=}")
         
     # remove doublets
     if doublet_col:
         logger.info("Removing doublets")
         # convert to str to accomodate str and bool
-        adata = adata[~(adata.obs[doublet_col].astype(str).str.lower() == 'true')]
+        adata = adata[~(adata.obs[doublet_col].astype(str).str.lower() == 'true')];
         logger.info(f"{adata.shape=}")
     
     # remove nan cell type

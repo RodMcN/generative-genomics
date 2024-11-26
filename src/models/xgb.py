@@ -4,7 +4,7 @@ from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 import joblib
 import tempfile
-from sklearn.metrics import f1_score
+from sklearn.metrics import precision_recall_fscore_support
 
 
 class XGBWrapper:
@@ -46,38 +46,44 @@ class XGBWrapper:
     
     def evaluate(self, test_x, test_y, categories, category_mapping=None):
         test_y_pred = self.model.predict(test_x)
-                
+                    
         # Map integer labels to class names
         test_y_series = pd.Series(test_y).map(lambda x: categories[x])
         test_y_pred_series = pd.Series(test_y_pred).map(lambda x: categories[x])
         
         if category_mapping is not None:
-            output_cols = ["mapped_cell_type", "f1_score"]
+            output_cols = ["mapped_cell_type", "precision", "recall", "f1_score"]
             
             mapped_test_y = test_y_series.map(category_mapping).fillna(test_y_series)
             mapped_test_y_pred = test_y_pred_series.map(category_mapping).fillna(test_y_pred_series)
             
             mapped_categories = sorted(mapped_test_y.unique())
         else:
-            output_cols = ["cell_type", "f1_score"]
+            output_cols = ["cell_type", "precision", "recall", "f1_score"]
             mapped_test_y = test_y_series
             mapped_test_y_pred = test_y_pred_series
             mapped_categories = sorted(mapped_test_y.unique())
             
         output_rows = []
 
-        # F1 per class
-        f1_per_class = f1_score(mapped_test_y, mapped_test_y_pred, labels=mapped_categories, average=None)
-        for cat, score in zip(mapped_categories, f1_per_class):
-            output_rows.append((cat, score))
+        # Precision, Recall, and F1 per class
+        precision_per_class, recall_per_class, f1_per_class, _ = precision_recall_fscore_support(
+            mapped_test_y, mapped_test_y_pred, labels=mapped_categories, average=None)
 
-        # Macro-Averaged F1
-        macro_f1 = f1_score(mapped_test_y, mapped_test_y_pred, average='macro')
-        output_rows.append(("macro averaged", macro_f1))
+        for cat, prec, rec, f1 in zip(mapped_categories, precision_per_class, recall_per_class, f1_per_class):
+            output_rows.append((cat, prec, rec, f1))
 
-        # Micro-Averaged F1
-        micro_f1 = f1_score(mapped_test_y, mapped_test_y_pred, average='micro')
-        output_rows.append(("micro averaged", micro_f1))
+        # Macro-Averaged Precision, Recall, and F1
+        macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
+            mapped_test_y, mapped_test_y_pred, average='macro')
+
+        output_rows.append(("macro averaged", macro_precision, macro_recall, macro_f1))
+
+        # Micro-Averaged Precision, Recall, and F1
+        micro_precision, micro_recall, micro_f1, _ = precision_recall_fscore_support(
+            mapped_test_y, mapped_test_y_pred, average='micro')
+
+        output_rows.append(("micro averaged", micro_precision, micro_recall, micro_f1))
 
         return pd.DataFrame(output_rows, columns=output_cols)
         
