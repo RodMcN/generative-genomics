@@ -5,6 +5,7 @@ from utils import get_logger
 
 logger = get_logger(__name__)
 
+
 class RNADataset(Dataset):
     def __init__(self, data, labels):
         self.data = torch.FloatTensor(data).share_memory_()
@@ -26,7 +27,7 @@ class Metrics:
         self.running_loss = 0
         self._epochs = 0
         self._steps = 0
-        
+
         self.early_stopping_rounds = early_stopping_rounds
         self.early_stopping_warmup = early_stopping_warmup
         self.best_loss = float("inf")
@@ -66,33 +67,37 @@ class Metrics:
             self.epochs_since_best += 1
 
         if log:
-            logger.info(f"{self.desc}: Epoch {self._epochs} | KL: {kl:.4f} | recon: {recon:.4f} | loss: {loss:.4f}")
+            logger.info(
+                f"{self.desc}: Epoch {self._epochs} | KL: {kl:.4f} | recon: {recon:.4f} | loss: {loss:.4f}"
+            )
 
     def early_stopping(self, verbose=True):
         if verbose:
-            logger.info(f"Epochs epochs_since_best = {self.epochs_since_best}. Early Stopping rounds = {self.early_stopping_rounds}. Best loss = {self.best_loss}")
+            logger.info(
+                f"Epochs epochs_since_best = {self.epochs_since_best}. Early Stopping rounds = {self.early_stopping_rounds}. Best loss = {self.best_loss}"
+            )
         if self.epochs_since_best > self.early_stopping_rounds:
             return True
         return False
-
 
 
 def get_dataloader(dataset, config, weights=None, training=True):
     if weights is not None:
         sample_weights_tensor = torch.DoubleTensor(weights)
         sampler = torch.utils.data.WeightedRandomSampler(
-            weights=sample_weights_tensor, 
-            num_samples=len(sample_weights_tensor), 
-            replacement=True
+            weights=sample_weights_tensor,
+            num_samples=len(sample_weights_tensor),
+            replacement=True,
         )
     else:
         sampler = None
-    
-    return DataLoader(dataset,
-                         batch_size=config['batch_size'],
-                         num_workers=config['train_workers'] if training else config['val_workers'],
-                         pin_memory=training,
-                         drop_last=True,
-                         persistent_workers=training,
-                         sampler=sampler # sampler handles shuffling
-                       )
+
+    return DataLoader(
+        dataset,
+        batch_size=config["batch_size"],
+        num_workers=config["train_workers"] if training else config["val_workers"],
+        pin_memory=training,
+        drop_last=True,
+        persistent_workers=training,
+        sampler=sampler,  # sampler handles shuffling
+    )
